@@ -16,14 +16,14 @@ knowing what it will do is how you tell whether it did the right thing.
 ## 1. Install
 
 ```sh
-claude plugin marketplace add my-organization-for-testing-067/repo-fleet
-claude plugin install fleet-workspace@repo-fleet
-claude plugin install code-search@repo-fleet
+claude plugin marketplace add agent-toolworks/plugins
+claude plugin install fleet-workspace@agent-toolworks
+claude plugin install code-search@agent-toolworks
 ```
 
-One catalog, two plugins. `fleet-workspace` lives in this repo;
+One catalog, three plugins. `fleet-workspace` lives in this repo;
 `code-search` lives in
-[code-search-fleet](https://github.com/my-organization-for-testing-067/code-search-fleet)
+[code-search-fleet](https://github.com/agent-toolworks/code-search-fleet)
 and is listed here so adopting the environment is one `marketplace add`.
 
 Restart Claude Code so the skills load. Check with `claude plugin list`.

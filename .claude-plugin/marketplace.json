@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "repo-fleet",
-  "description": "An opinionated environment for working across many repositories: a fleet of repos, per-ticket worktree workspaces, and search that understands both levels",
+  "description": "DEPRECATED as a catalogue — use agent-toolworks/plugins. Kept working for existing installs. An opinionated environment for working across many repositories: a fleet of repos, per-ticket worktree workspaces, and search that understands both levels",
   "owner": {
     "name": "Zvi Rahamim"
   },
@@ -13,19 +13,19 @@
       "author": { "name": "Zvi Rahamim" },
       "category": "productivity",
       "source": "./",
-      "homepage": "https://github.com/my-organization-for-testing-067/repo-fleet"
+      "homepage": "https://github.com/agent-toolworks/repo-fleet"
     },
     {
       "name": "code-search",
       "description": "Search across many repositories at once — who calls an endpoint, where a symbol is defined, what implements an interface, which repo publishes a package, and when a cross-repo seam last changed. Routes each question to whichever of five engines can answer it, and labels every answer with the kind of evidence behind it.",
-      "version": "1.8.1",
+      "version": "1.13.0",
       "author": { "name": "Zvi Rahamim" },
       "category": "productivity",
       "source": {
         "source": "url",
-        "url": "https://github.com/my-organization-for-testing-067/code-search-fleet.git"
+        "url": "https://github.com/agent-toolworks/code-search-fleet.git"
       },
-      "homepage": "https://github.com/my-organization-for-testing-067/code-search-fleet"
+      "homepage": "https://github.com/agent-toolworks/code-search-fleet"
     }
   ]
 }

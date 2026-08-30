@@ -14,9 +14,9 @@ Two levels, and the distinction is the whole design:
   for the ticket.
 
 ```sh
-claude plugin marketplace add my-organization-for-testing-067/repo-fleet
-claude plugin install fleet-workspace@repo-fleet
-claude plugin install code-search@repo-fleet
+claude plugin marketplace add agent-toolworks/plugins
+claude plugin install fleet-workspace@agent-toolworks
+claude plugin install code-search@agent-toolworks
 ```
 
 Two plugins, one catalog. They are **peers, not layers** — neither depends on
@@ -26,7 +26,7 @@ the directory layout above.
 | Plugin | Lives in | Does |
 |---|---|---|
 | `fleet-workspace` | this repo | clones the fleet, creates and tears down ticket workspaces |
-| `code-search` | [code-search-fleet](https://github.com/my-organization-for-testing-067/code-search-fleet) | one search interface over five engines, which understands the two-level layout |
+| `code-search` | [code-search-fleet](https://github.com/agent-toolworks/code-search-fleet) | one search interface over five engines, which understands the two-level layout |
 
 `code-search` is genuinely useful on its own — point `FLEET_ROOT` at any
 directory of repos — and is installable from its own repo. It is listed here so
