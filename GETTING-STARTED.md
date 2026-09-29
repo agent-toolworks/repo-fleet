@@ -216,7 +216,7 @@ export CS_TIMEOUT=120        # per-engine seconds; a timeout reports PARTIAL
 ```sh
 fleet-init --status                 # config, repos, hooks, live tickets
 cs engines                          # which search engines are present
-verify-search                       # 20 checks (code-search-fleet)
+verify-search                       # 200+ checks (code-search-fleet)
 ```
 
 `verify-search` builds its own fixture repos, so it answers "does this work on
