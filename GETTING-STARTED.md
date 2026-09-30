@@ -229,6 +229,6 @@ results ever look wrong.
 |---|---|
 | Agent-facing workflow skill | `skills/ticket-workspace/SKILL.md` (this repo) |
 | Agent-facing search skill | `skills/code-search/SKILL.md` (code-search-fleet) |
-| Why the search is built this way | code-search-fleet's `README.md` and `fixtures/BASELINE.md` |
+| Why the search is built this way | code-search-fleet's `docs/answer-kinds.md` and `fixtures/BASELINE.md` |
 | Your config | `~/.config/repo-fleet/fleet.env` |
 | Your hooks | `~/.config/repo-fleet/hooks/` |
