@@ -296,6 +296,79 @@ if git -C "$TICKETS_ROOT/TEST-3/gamma-web" log -1 --pretty=%s 2>/dev/null | grep
 else bad "refresh-preserves-worktree"; fi
 "$here/close-ticket" TEST-3 --force >/dev/null 2>&1
 
+# ---- hub source ------------------------------------------------------------
+# hub-source/run is what toolworks-hub shows. Its "close-ticket would" column is
+# a promise about close-ticket, so it is checked against close-ticket itself:
+# a source that says "close it" for a workspace close-ticket refuses (or the
+# other way round) sends someone to --force, or to a pointless retry.
+say ""
+say "${B}hub source${O}"
+src="$here/../hub-source/run"
+plugin_v=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$here/../.claude-plugin/plugin.json")
+source_v=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$here/../hub-source/source.json")
+[[ "$plugin_v" == "$source_v" ]] && ok "hub-source/source.json has the plugin's version ($plugin_v)" \
+  || bad "hub-source-version ($source_v, plugin $plugin_v)"
+
+state=$(FLEET_ROOT="$root/nowhere" "$src" detect | python3 -c 'import json,sys; print(json.load(sys.stdin)["state"])')
+[[ "$state" == "not_set_up" ]] && ok "detect: a missing fleet root is not_set_up, not broken" \
+  || bad "hub-detect-missing ($state)"
+
+# One ticket per close-ticket outcome. Hook output from the sections above is
+# cleaned first, so each ticket is blocked by its own case and nothing else.
+for t in HUB-1:alpha-api HUB-2:beta-service HUB-3:gamma-web HUB-4:alpha-api; do
+  "$here/new-ticket" "${t%%:*}" "${t#*:}" >/dev/null 2>&1
+  git -C "$TICKETS_ROOT/${t%%:*}/${t#*:}" clean -fdq
+done
+git_q -C "$TICKETS_ROOT/HUB-2/beta-service" commit -q --allow-empty -m "HUB-2: in progress"
+echo "edited" >> "$TICKETS_ROOT/HUB-3/gamma-web/src/app.js"
+touch "$TICKETS_ROOT/HUB-4/alpha-api/leftover.tmp"
+
+# A transcript whose session worked in HUB-2, as Claude Code writes them.
+sid=0b6f3a52-1c2d-4e5f-8a9b-0c1d2e3f4a5b
+mkdir -p "$root/claude/projects/-hub-2"
+printf '{"type":"user","cwd":"%s","sessionId":"%s"}\n' "$TICKETS_ROOT/HUB-2/beta-service" "$sid" \
+  > "$root/claude/projects/-hub-2/$sid.jsonl"
+title=$(TOOLWORKS_CLAUDE_DIRS="$root/claude" "$src" show session "$sid" \
+  | python3 -c 'import json,sys; print(" | ".join(w["title"] for w in json.load(sys.stdin)["widgets"]))')
+[[ "$title" == "Ticket HUB-2 workspace" ]] && ok "show session: the ticket the session worked in" \
+  || bad "hub-show-session ($title)"
+n=$(TOOLWORKS_CLAUDE_DIRS="$root/claude" "$src" show session 00000000-0000-4000-8000-000000000000 \
+  | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["widgets"]))')
+[[ "$n" == "0" ]] && ok "show session: nothing for a session it knows nothing about" \
+  || bad "hub-show-unknown ($n widgets)"
+
+hub="${TOOLWORKS_HUB_REPO:-$HOME/git/home/toolworks-hub}/scripts/hub"
+if [[ -x "$hub" ]]; then
+  if CLAUDE_CONFIG_DIR="$root/claude" "$hub" check-source "$here/../hub-source" \
+       --entity "session=$sid" >"$root/check-source.out" 2>&1; then
+    ok "toolworks-hub check-source passes, show included"
+  else bad "hub-check-source"; sed 's/^/    /' "$root/check-source.out" >&2; fi
+else
+  note "no toolworks-hub clone at ${hub%/scripts/hub}: check-source skipped (set TOOLWORKS_HUB_REPO)"
+fi
+
+# The source's verdict per ticket, then what close-ticket actually does.
+verdicts=$("$src" fetch workspaces | python3 -c '
+import json, sys
+ready = {}
+for r in json.load(sys.stdin)["data"]["rows"]:
+    ready[r["ticket"]] = ready.get(r["ticket"], True) and r["state"] == "close it"
+for t, v in sorted(ready.items()):
+    print(t, "close" if v else "refuse")')
+want="HUB-1 close HUB-2 refuse HUB-3 refuse HUB-4 refuse"
+got=$(printf '%s\n' "$verdicts" | grep '^HUB-' | tr '\n' ' ' | sed 's/ $//')
+[[ "$got" == "$want" ]] && ok "the source: clean closes; unmerged, edited and untracked are refused" \
+  || bad "hub-verdicts-expected ($got)"
+agree=1
+for t in HUB-1 HUB-2 HUB-3 HUB-4; do
+  said=$(printf '%s\n' "$verdicts" | awk -v t="$t" '$1 == t { print $2 }')
+  if "$here/close-ticket" "$t" >/dev/null 2>&1; then did=close; else did=refuse; fi
+  [[ "$said" == "$did" ]] || { agree=0; say "    $t: source says ${said:-nothing}, close-ticket did $did"; }
+done
+[[ $agree -eq 1 ]] && ok "the source's 'close-ticket would' matches what close-ticket does" \
+  || bad "hub-verdicts"
+for t in HUB-2 HUB-3 HUB-4; do "$here/close-ticket" "$t" --force >/dev/null 2>&1; done
+
 # ---- summary ---------------------------------------------------------------
 say ""
 say "${B}$pass passed, $fail failed${O}"

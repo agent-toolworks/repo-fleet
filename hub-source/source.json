@@ -1,0 +1,16 @@
+{
+  "contract": 4,
+  "name": "fleet-workspace",
+  "title": "repo-fleet",
+  "version": "1.2.0",
+  "network": false,
+  "refresh_seconds": 120,
+  "timeout_seconds": 20,
+  "widgets": [
+    {"id": "tickets", "kind": "stat", "title": "Ticket workspaces"},
+    {"id": "ready", "kind": "stat", "title": "Ready to close"},
+    {"id": "workspaces", "kind": "table", "title": "Ticket workspaces, one row per repo"},
+    {"id": "fleet", "kind": "table", "title": "Fleet repos"}
+  ],
+  "shows": ["session"]
+}

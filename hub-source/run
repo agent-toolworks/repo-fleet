@@ -1,0 +1,354 @@
+#!/usr/bin/env python3
+"""fleet-workspace's source for toolworks-hub (contract 4).
+
+The hub finds this folder inside the installed plugin and runs:
+
+  run detect               whether the fleet is set up: config, fleet root, repos
+  run fetch <widget>       ticket workspaces and fleet repos, read from git
+  run show session <id>    the ticket workspace a Claude Code session worked in
+
+It only reads: git status, rev-list, log and worktree list, never fetch, reset
+or remove. FLEET_ROOT and TICKETS_ROOT come from the plugin's own
+scripts/lib/common.sh, so the hub sees the fleet the scripts see. Whether a
+workspace is ready to close follows close-ticket's guards; verify-workspace
+checks that the two agree.
+"""
+import datetime as dt
+import glob
+import json
+import os
+import re
+import subprocess
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+COMMON = os.path.join(ROOT, "scripts", "lib", "common.sh")
+FLEET_INIT = os.path.join(ROOT, "scripts", "fleet-init")
+SESSION_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+CWD = re.compile(r'"cwd":\s*"((?:[^"\\]|\\.)*)"')
+
+
+def out(value):
+    json.dump(value, sys.stdout, ensure_ascii=False)
+    sys.stdout.write("\n")
+
+
+def fail(message):
+    sys.stderr.write(message + "\n")
+    sys.exit(1)
+
+
+def tool_version():
+    try:
+        with open(os.path.join(ROOT, ".claude-plugin", "plugin.json")) as f:
+            return json.load(f).get("version") or "unknown"
+    except (OSError, ValueError):
+        return "unknown"
+
+
+def layout():
+    """FLEET_ROOT, TICKETS_ROOT, the config file, resolved by common.sh itself."""
+    script = 'source "$1" && printf "%s\\n%s\\n%s\\n" "$FLEET_ROOT" "$TICKETS_ROOT" "$FLEET_CONFIG_DIR"'
+    res = subprocess.run(["bash", "-c", script, "_", COMMON],
+                         capture_output=True, text=True, timeout=5)
+    if res.returncode != 0:
+        raise RuntimeError("scripts/lib/common.sh failed: " + (res.stderr.strip() or "exit %d" % res.returncode))
+    fleet, tickets, config = res.stdout.split("\n")[:3]
+    return fleet, tickets, os.path.join(config, "fleet.env")
+
+
+def git(path, *args):
+    """stdout, or None when git fails."""
+    res = subprocess.run(["git", "-C", path] + list(args), capture_output=True, text=True)
+    return res.stdout if res.returncode == 0 else None
+
+
+def fleet_repos(fleet):
+    """The names fleet_repos() in common.sh lists: folders holding a .git folder."""
+    try:
+        names = sorted(os.listdir(fleet))
+    except OSError:
+        return []
+    return [n for n in names if os.path.isdir(os.path.join(fleet, n, ".git"))]
+
+
+def default_branch(repo_dir):
+    """origin/HEAD, else origin/main, else origin/master; None when none exists."""
+    ref = git(repo_dir, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD")
+    if ref:
+        return ref.strip()[len("refs/remotes/origin/"):]
+    for b in ("main", "master"):
+        if git(repo_dir, "show-ref", "--verify", "--quiet", "refs/remotes/origin/" + b) is not None:
+            return b
+    return None
+
+
+def count(text):
+    return 0 if text is None else int(text.strip() or 0)
+
+
+# ---- ticket workspaces -------------------------------------------------------
+
+def workspace_rows(fleet, tickets, only=None):
+    """One row per repo folder in each ticket workspace, with close-ticket's verdict."""
+    rows = []
+    try:
+        names = sorted(os.listdir(tickets))
+    except OSError:
+        names = []
+    for ticket in names:
+        if only is not None and ticket != only:
+            continue
+        ws = os.path.join(tickets, ticket)
+        if not os.path.isdir(ws):
+            continue
+        repos = sorted(n for n in os.listdir(ws) if os.path.isdir(os.path.join(ws, n)))
+        if not repos:
+            rows.append({"ticket": ticket, "repo": None, "branch": None,
+                         "state": "empty workspace", "ahead": None, "changed": None,
+                         "last-commit": None, "path": ws})
+        for repo in repos:
+            rows.append(workspace_row(fleet, ticket, repo, os.path.join(ws, repo)))
+    return rows
+
+
+def workspace_row(fleet, ticket, repo, dest):
+    row = {"ticket": ticket, "repo": repo, "branch": None, "state": None, "ahead": None,
+           "changed": None, "last-commit": None, "path": dest}
+    if not os.path.exists(os.path.join(dest, ".git")):
+        row["state"] = "not a worktree: remove it by hand"
+        return row
+    branch = git(dest, "rev-parse", "--abbrev-ref", "HEAD")
+    row["branch"] = branch.strip() if branch else None
+    last = git(dest, "log", "-1", "--format=%cI")
+    row["last-commit"] = last.strip() if last else None
+    src = os.path.join(fleet, repo)
+    # The order of close-ticket's checks, so the first one that blocks is the one shown.
+    if not os.path.isdir(os.path.join(src, ".git")):
+        row["state"] = "no matching fleet repo: remove it by hand"
+        return row
+    dirty = [line for line in (git(dest, "status", "--porcelain") or "").split("\n") if line]
+    row["changed"] = len(dirty)
+    base = default_branch(src) or "main"
+    unmerged = git(dest, "rev-list", "--count", "origin/%s..HEAD" % base)
+    row["ahead"] = None if unmerged is None else count(unmerged)
+    if dirty:
+        tracked = [line for line in dirty if not line.startswith("??")]
+        if tracked:
+            row["state"] = "uncommitted changes to tracked files"
+        else:
+            row["state"] = "%d untracked file(s), no tracked edits" % len(dirty)
+    elif row["ahead"]:
+        row["state"] = "%d commit(s) not in origin/%s" % (row["ahead"], base)
+    else:
+        row["state"] = "ready to close"
+    return row
+
+
+WORKSPACE_COLUMNS = [
+    {"id": "ticket", "title": "Ticket"},
+    {"id": "repo", "title": "Repo"},
+    {"id": "branch", "title": "Branch"},
+    {"id": "state", "title": "close-ticket would"},
+    {"id": "ahead", "title": "Commits not on the default branch"},
+    {"id": "changed", "title": "Changed files"},
+    {"id": "last-commit", "title": "Last commit"},
+    {"id": "path", "title": "Path"},
+]
+
+
+def verdict(state):
+    """The close-ticket column: what it would do, in its words."""
+    return "close it" if state == "ready to close" else "refuse: " + state
+
+
+def table(rows):
+    shown = []
+    for r in rows:
+        r = dict(r)
+        r["state"] = verdict(r["state"])
+        shown.append(r)
+    return {"columns": WORKSPACE_COLUMNS, "rows": shown}
+
+
+def tickets_by_readiness(rows):
+    ready = {}
+    for r in rows:
+        ok = r["state"] in ("ready to close", "empty workspace")
+        ready[r["ticket"]] = ready.get(r["ticket"], True) and ok
+    return ready
+
+
+# ---- fleet repos -------------------------------------------------------------
+
+def fleet_rows(fleet):
+    rows = []
+    for repo in fleet_repos(fleet):
+        d = os.path.join(fleet, repo)
+        base = default_branch(d)
+        branch = git(d, "rev-parse", "--abbrev-ref", "HEAD")
+        behind = git(d, "rev-list", "--count", "HEAD..origin/" + base) if base else None
+        dirty = [line for line in (git(d, "status", "--porcelain") or "").split("\n") if line]
+        trees = (git(d, "worktree", "list", "--porcelain") or "").count("\nworktree ")
+        fetched = None
+        try:
+            git_dir = git(d, "rev-parse", "--absolute-git-dir")
+            mtime = os.path.getmtime(os.path.join(git_dir.strip(), "FETCH_HEAD"))
+            fetched = dt.datetime.fromtimestamp(mtime, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except (OSError, AttributeError):
+            pass
+        rows.append({
+            "repo": repo,
+            "branch": branch.strip() if branch else None,
+            "default": base,
+            "behind": None if behind is None else count(behind),
+            "local-changes": len(dirty),
+            "fetched": fetched,
+            "worktrees": trees,
+        })
+    return rows
+
+
+FLEET_COLUMNS = [
+    {"id": "repo", "title": "Repo"},
+    {"id": "branch", "title": "Checked out"},
+    {"id": "default", "title": "Default branch"},
+    {"id": "behind", "title": "Behind origin"},
+    {"id": "local-changes", "title": "Local changes (refresh-fleet skips)"},
+    {"id": "fetched", "title": "Last fetched"},
+    {"id": "worktrees", "title": "Ticket worktrees"},
+]
+
+
+# ---- sessions ----------------------------------------------------------------
+
+def claude_dirs():
+    named = [d for d in os.environ.get("TOOLWORKS_CLAUDE_DIRS", "").split(os.pathsep) if d]
+    return named or [os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")]
+
+
+def session_cwds(session_id):
+    """Every working directory the session's transcript records, in order."""
+    seen = []
+    for d in claude_dirs():
+        for path in glob.glob(os.path.join(d, "projects", "*", session_id + ".jsonl")):
+            try:
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        for m in CWD.finditer(line):
+                            try:
+                                cwd = json.loads('"%s"' % m.group(1))
+                            except ValueError:
+                                continue
+                            if cwd not in seen:
+                                seen.append(cwd)
+            except OSError:
+                continue
+    return seen
+
+
+def under(path, root):
+    path, root = os.path.realpath(path), os.path.realpath(root)
+    if path == root or not path.startswith(root.rstrip(os.sep) + os.sep):
+        return None
+    return path[len(root.rstrip(os.sep)) + 1:].split(os.sep)
+
+
+def show_session(session_id):
+    if not SESSION_ID.match(session_id):
+        return {"widgets": []}
+    fleet, tickets, _ = layout()
+    found, in_fleet = [], []
+    for cwd in session_cwds(session_id):
+        parts = under(cwd, tickets)
+        if parts and parts[0] not in found:
+            found.append(parts[0])
+        parts = under(cwd, fleet)
+        if parts and parts[0] not in in_fleet:
+            in_fleet.append(parts[0])
+    widgets = []
+    for ticket in found:
+        rows = workspace_rows(fleet, tickets, only=ticket)
+        if rows:
+            widgets.append({"id": "workspace-" + slug(ticket), "kind": "table",
+                            "title": "Ticket %s workspace" % ticket, "data": table(rows)})
+        else:
+            widgets.append({"id": "workspace-" + slug(ticket), "kind": "list",
+                            "title": "Ticket %s workspace" % ticket,
+                            "data": {"items": [{"text": "closed: %s is gone" % os.path.join(tickets, ticket)}]}})
+    if in_fleet:
+        widgets.append({"id": "fleet-checkouts", "kind": "list", "title": "Worked in the fleet itself",
+                        "data": {"items": [{"text": repo, "detail": "refresh-fleet resets this checkout; work belongs in a ticket workspace"}
+                                           for repo in in_fleet]}})
+    return {"widgets": widgets}
+
+
+def slug(text):
+    s = re.sub(r"[^a-z0-9-]+", "-", text.lower()).strip("-")
+    return (s or "ticket")[:50]
+
+
+# ---- commands ----------------------------------------------------------------
+
+def detect():
+    version = tool_version()
+    try:
+        fleet, tickets, config = layout()
+    except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+        return {"state": "broken", "reason": str(exc), "tool_version": version}
+    if subprocess.run(["git", "--version"], capture_output=True).returncode != 0:
+        return {"state": "broken", "reason": "git is not on the PATH", "tool_version": version}
+    if not os.path.isfile(config) and not os.path.isdir(fleet):
+        return {"state": "not_set_up", "reason": "no fleet config at %s" % config,
+                "fix": "%s --config --fleet-root DIR --tickets-root DIR" % FLEET_INIT,
+                "tool_version": version}
+    if not os.path.isdir(fleet):
+        return {"state": "not_set_up", "reason": "the fleet root %s does not exist" % fleet,
+                "fix": "%s --clone <owner/repo> ..." % FLEET_INIT, "tool_version": version}
+    if not fleet_repos(fleet):
+        return {"state": "not_set_up", "reason": "no repos cloned in %s" % fleet,
+                "fix": "%s --clone <owner/repo> ..." % FLEET_INIT, "tool_version": version}
+    return {"state": "working", "tool_version": version}
+
+
+def fetch(widget):
+    fleet, tickets, _ = layout()
+    if not os.path.isdir(fleet):
+        fail("the fleet root %s does not exist" % fleet)
+    notice = None if os.path.isdir(tickets) else "no tickets folder yet at %s" % tickets
+    if widget in ("tickets", "ready", "workspaces"):
+        rows = workspace_rows(fleet, tickets)
+        ready = tickets_by_readiness(rows)
+        if widget == "tickets":
+            data = {"value": len(ready), "label": tickets}
+            result = {"kind": "stat", "data": data}
+        elif widget == "ready":
+            data = {"value": sum(ready.values()), "label": "of %d: clean, nothing unmerged" % len(ready)}
+            result = {"kind": "stat", "data": data}
+        else:
+            result = {"kind": "table", "data": table(rows)}
+    elif widget == "fleet":
+        result = {"kind": "table", "data": {"columns": FLEET_COLUMNS, "rows": fleet_rows(fleet)}}
+    else:
+        fail("unknown widget: %s" % widget)
+    if notice:
+        result["notice"] = notice
+    return result
+
+
+def main(argv):
+    if argv[:1] == ["detect"]:
+        out(detect())
+    elif len(argv) >= 2 and argv[0] == "fetch":
+        out(fetch(argv[1]))
+    elif len(argv) == 3 and argv[0] == "show" and argv[1] == "session":
+        out(show_session(argv[2]))
+    elif len(argv) == 3 and argv[0] == "show":
+        out({"widgets": []})
+    else:
+        sys.stderr.write("usage: run detect | run fetch <widget> | run show session <id>\n")
+        sys.exit(2)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
