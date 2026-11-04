@@ -82,7 +82,7 @@ the usual reason one silently does nothing.
 ## Verifying
 
 ```sh
-scripts/verify-workspace          # 30 checks against a throwaway fleet
+scripts/verify-workspace          # 37 checks against a throwaway fleet
 ```
 
 It builds its own fleet of small git repos with real bare origins, then drives
@@ -93,6 +93,25 @@ temporary directory, which is why `FLEET_CONFIG_DIR` is overridable at all.
 
 The guards below are the reason it exists. They are the part that can lose
 work, and a guard nobody tests is one that quietly stops working.
+
+## In toolworks-hub
+
+With the plugin installed, [toolworks-hub](https://github.com/agent-toolworks/toolworks-hub)
+finds `hub-source/` and shows a repo-fleet tab:
+
+- every ticket workspace, one row per repo, with its branch, changed files,
+  commits not on the default branch, and what `close-ticket` would do with it
+  (close it, or refuse and why);
+- the fleet repos: what each has checked out, how far behind origin it is,
+  local changes that `refresh-fleet` would skip, when it was last fetched, and
+  how many ticket worktrees it holds.
+
+A session's page in the hub gets the ticket workspace that session worked in,
+from the working directories its transcript records. The source only reads:
+git status, log, rev-list and worktree list, never fetch, reset or remove. It
+finds `FLEET_ROOT` and `TICKETS_ROOT` through `scripts/lib/common.sh`, so it
+sees the fleet the scripts see, and `verify-workspace` checks that its
+"close-ticket would" column agrees with `close-ticket`.
 
 ## Safety properties
 
